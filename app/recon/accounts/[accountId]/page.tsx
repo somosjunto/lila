@@ -645,12 +645,16 @@ export default async function AccountDetailPage({
       );
     }
 
-    const { data: yLinesData } = await supabase
-      .from("recon_bg_yappy_lines")
-      .select("*")
-      .eq("account_id", accountId)
-      .eq("is_active", true)
-      .order("posted_date", { ascending: false });
+    const yLinesData = await fetchAllPages((cursor, pageSize) =>
+      supabase
+        .from("recon_bg_yappy_lines")
+        .select("*")
+        .eq("account_id", accountId)
+        .eq("is_active", true)
+        .order("posted_date", { ascending: false })
+        .order("line_uid", { ascending: false })
+        .range(cursor, cursor + pageSize - 1),
+    );
     if (yLinesData) {
       bgYappyLines.push(
         ...yLinesData.map((yl) => ({
@@ -1207,7 +1211,7 @@ export default async function AccountDetailPage({
 
           <BgBatchList batches={bgBatches} />
 
-          <BgYappyPanel batches={bgYappyBatches} lines={bgYappyLines} />
+          <BgYappyPanel accountId={accountId} batches={bgYappyBatches} lines={bgYappyLines} />
         </div>
       )}
 
@@ -1390,9 +1394,15 @@ export default async function AccountDetailPage({
       <Card className="mt-8">
         <CardHeader className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Loan-related credits</CardTitle>
+            <CardTitle>
+              {account.rail === "bg"
+                ? "Transacciones regulares (Estado de cuenta)"
+                : "Loan-related credits"}
+            </CardTitle>
             <CardDescription>
-              PR (Junto-initiated ACH inbound) and 4C / 4E (irrevocable inbound ACH) only.
+              {account.rail === "bg"
+                ? "Transferencias en línea, banca móvil, ACH Xpress, ACH interbancario y depósitos conciliados del estado de cuenta."
+                : "PR (Junto-initiated ACH inbound) and 4C / 4E (irrevocable inbound ACH) only."}
             </CardDescription>
           </div>
           <Button asChild variant="secondary" size="sm">
@@ -1476,7 +1486,9 @@ export default async function AccountDetailPage({
         <CardBody>
           {credits.length === 0 ? (
             <p className="text-sm text-fg-muted">
-              No loan credits match the current filters.
+              {account.rail === "bg"
+                ? "No hay transacciones regulares del estado de cuenta con los filtros seleccionados."
+                : "No loan credits match the current filters."}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -1510,7 +1522,9 @@ export default async function AccountDetailPage({
                         reasonText = "—";
                       }
                     } else if (row.state === "pending") {
-                      reasonText = "Awaiting batch link";
+                      reasonText = account.rail === "bg" ? "Por asignar" : "Awaiting batch link";
+                    } else if (account.rail === "bg" && row.state === "confirmed") {
+                      reasonText = "Recibido / Confirmado";
                     } else {
                       reasonText = "—";
                     }

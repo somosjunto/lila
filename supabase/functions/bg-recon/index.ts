@@ -150,37 +150,7 @@ export default {
       // 4. Sync snapshot into Supabase tables
       const syncResult = await syncSnapshotToDatabase(adminSupabase, accountId, snapshot);
 
-      // 5. Ingest statement movements into recon_transactions for UI reporting
-      for (const st of statements) {
-        if (st.isIgnored) continue;
-        const txnInserts = st.rows.map((r, idx) => {
-          const rowHashInput = `${accountId}|${r.postedDate}|${r.code}|${r.description}|${r.debitMinor ?? ""}|${r.creditMinor ?? ""}|${r.balanceMinor ?? ""}|${r.ref1}|${r.ref2}|${idx}`;
-          return {
-            account_id: accountId,
-            posted_at: `${r.postedDate}T00:00:00Z`,
-            code: r.code || "BG",
-            description: r.description,
-            debit_minor: r.debitMinor != null ? String(r.debitMinor) : null,
-            credit_minor: r.creditMinor != null ? String(r.creditMinor) : null,
-            balance_minor: r.balanceMinor != null ? String(r.balanceMinor) : null,
-            rail_native_ref: r.ref2 || r.ref1 || "",
-            row_hash: rowHashInput,
-            state: "pending",
-          };
-        });
-
-        if (txnInserts.length > 0) {
-          const CHUNK = 500;
-          for (let i = 0; i < txnInserts.length; i += CHUNK) {
-            const chunk = txnInserts.slice(i, i + CHUNK);
-            await adminSupabase
-              .from("recon_transactions")
-              .upsert(chunk, { onConflict: "account_id,row_hash", ignoreDuplicates: true });
-          }
-        }
-      }
-
-      // 6. Format canonical response
+      // 5. Format canonical response
       const canonicalContract = toCanonicalJsonContract(snapshot);
 
       return new Response(

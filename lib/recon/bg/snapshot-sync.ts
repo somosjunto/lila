@@ -12,6 +12,7 @@ export interface SyncSnapshotResult {
   coverageDaysUpserted: number;
   pendingTasksUpserted: number;
   alertsUpserted: number;
+  incomingUpserted: number;
 }
 
 export async function syncSnapshotToDatabase(
@@ -173,9 +174,13 @@ export async function syncSnapshotToDatabase(
 
   for (let i = 0; i < yappyLineInserts.length; i += CHUNK_SIZE) {
     const chunk = yappyLineInserts.slice(i, i + CHUNK_SIZE);
-    await supabase
+    const { error: yLinesError } = await supabase
       .from("recon_bg_yappy_lines")
       .upsert(chunk, { onConflict: "account_id,line_uid" });
+    if (yLinesError) {
+      console.error("Error upserting recon_bg_yappy_lines:", yLinesError);
+      throw yLinesError;
+    }
   }
 
   // 5. Replace Pending Tasks
@@ -216,6 +221,64 @@ export async function syncSnapshotToDatabase(
     await supabase.from("recon_bg_audit_alerts").insert(chunk);
   }
 
+  // 7. Sync Voluntary Inflows (Regular statement transactions) into recon_transactions
+  // Allows UI reporting, date filtering, KPI totals, and export for Banco General.
+  let fallbackUploadId: string | null = null;
+  const { data: latestUpload } = await supabase
+    .from("recon_uploads")
+    .select("id")
+    .eq("account_id", accountId)
+    .order("uploaded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestUpload?.id) {
+    fallbackUploadId = latestUpload.id;
+  }
+
+  const incomingTxnInserts = snapshot.incoming.map((inc) => {
+    const isNonLoan = inc.category === "non_loan" || inc.status === "non_loan";
+    const kind = isNonLoan ? "non_loan" : "loan_inflow";
+    const state = isNonLoan
+      ? "non_loan"
+      : inc.status === "received"
+        ? "confirmed"
+        : "pending";
+
+    const ref = inc.detectedLoanRef
+      ? inc.transferReference
+        ? `${inc.detectedLoanRef} · ${inc.transferReference}`
+        : inc.detectedLoanRef
+      : inc.paymentReference || inc.transferReference || null;
+
+    return {
+      ...(fallbackUploadId ? { upload_id: fallbackUploadId } : {}),
+      account_id: accountId,
+      posted_at: inc.date,
+      code: mapChannelToCode(inc.channel),
+      description: inc.description,
+      debit_minor: 0,
+      credit_minor: inc.amountMinor,
+      balance_minor: null,
+      currency: "USD",
+      payer_name_raw: inc.counterpart || null,
+      rail_native_ref: ref,
+      kind,
+      state,
+      row_hash: `${accountId}|bg_incoming|${inc.uid}`,
+    };
+  });
+
+  for (let i = 0; i < incomingTxnInserts.length; i += CHUNK_SIZE) {
+    const chunk = incomingTxnInserts.slice(i, i + CHUNK_SIZE);
+    const { error: incError } = await supabase
+      .from("recon_transactions")
+      .upsert(chunk, { onConflict: "account_id,row_hash" });
+    if (incError) {
+      console.error("Error upserting recon_transactions for BG incoming:", incError);
+      throw incError;
+    }
+  }
+
   return {
     batchesUpserted: batchInserts.length,
     yappyBatchesUpserted: yappyBatchInserts.length,
@@ -223,7 +286,25 @@ export async function syncSnapshotToDatabase(
     coverageDaysUpserted: coverageInserts.length,
     pendingTasksUpserted: pendingInserts.length,
     alertsUpserted: alertInserts.length,
+    incomingUpserted: incomingTxnInserts.length,
   };
+}
+
+export function mapChannelToCode(channel: string): string {
+  switch (channel) {
+    case "BG Transfer (online banking)":
+      return "TRANSF_ONLINE";
+    case "BG Transfer (mobile banking)":
+      return "TRANSF_MOVIL";
+    case "ACH Xpress":
+      return "ACH_XPRESS";
+    case "Interbank ACH":
+      return "ACH";
+    case "Deposit":
+      return "DEPOSITO";
+    default:
+      return "CREDITO";
+  }
 }
 
 /** Fetches manual assignments for an account from the database. */

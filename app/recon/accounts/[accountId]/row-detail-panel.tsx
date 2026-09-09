@@ -219,6 +219,25 @@ export function RowDetailPanel({
         </Section>
       )}
 
+      {/* Banco General regular transaction details */}
+      {!isPR && !isInboundACH && (
+        <Section
+          title={row.state === "confirmed" ? "Transacción conciliada (Banco General)" : "Transacción pendiente"}
+          tone={row.state === "confirmed" ? "success" : "info"}
+        >
+          <p className="text-sm text-fg-muted">
+            {row.state === "confirmed"
+              ? "Crédito voluntario identificado y recibido en el estado de cuenta de Banco General."
+              : "Crédito registrado en estado de cuenta pendiente de asignación manual de préstamo."}
+          </p>
+          {row.payer_name_raw && (
+            <p className="mt-1 text-xs text-fg-muted">
+              Pagador identificado: <strong className="text-fg">{row.payer_name_raw}</strong>
+            </p>
+          )}
+        </Section>
+      )}
+
       {/* Audit trail — always shown when there's anything in it. */}
       {manualActions.length > 0 && (
         <Section title="Operator audit trail">

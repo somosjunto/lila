@@ -1,7 +1,19 @@
 "use client";
 
-import { useState } from "react";
-import { CheckCircle2, Clock, Smartphone, AlertTriangle, ListFilter, Layers } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  CheckCircle2,
+  Clock,
+  Smartphone,
+  AlertTriangle,
+  ListFilter,
+  Layers,
+  Search,
+  X,
+  Download,
+  Calendar,
+  ArrowRight,
+} from "lucide-react";
 
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { formatMinorUSD } from "@/lib/recon/format";
@@ -37,23 +49,77 @@ export interface BgYappyLineView {
 }
 
 interface Props {
+  accountId?: string;
   batches: BgYappyBatchView[];
   lines?: BgYappyLineView[];
 }
 
-export function BgYappyPanel({ batches, lines = [] }: Props) {
+export function BgYappyPanel({ accountId, batches, lines = [] }: Props) {
   const [activeTab, setActiveTab] = useState<"batches" | "lines">("batches");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedDate, setSelectedDate] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
   const settledBatchesCount = batches.filter((b) => b.status === "settled").length;
   const receivedLinesCount = lines.filter((l) => l.status === "received").length;
   const inTransitLinesCount = lines.filter((l) => l.status === "in_transit").length;
   const pendingLinesCount = lines.filter((l) => l.status === "pending").length;
 
-  const filteredLines = lines.filter((l) => {
-    if (statusFilter === "all") return true;
-    return l.status === statusFilter;
-  });
+  // List of distinct dates present in lines, sorted descending
+  const availableDates = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const l of lines) {
+      if (l.postedDate) {
+        counts.set(l.postedDate, (counts.get(l.postedDate) || 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([date, count]) => ({ date, count }));
+  }, [lines]);
+
+  const filteredLines = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return lines.filter((l) => {
+      if (statusFilter !== "all" && l.status !== statusFilter) return false;
+      if (selectedDate && l.postedDate !== selectedDate) return false;
+      if (query) {
+        const matchesClient = (l.clientName || "").toLowerCase().includes(query);
+        const matchesPhone = (l.phoneNumber || "").toLowerCase().includes(query);
+        const matchesRef = (l.reference || "").toLowerCase().includes(query);
+        const matchesComment = (l.comment || "").toLowerCase().includes(query);
+        if (!matchesClient && !matchesPhone && !matchesRef && !matchesComment) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [lines, statusFilter, selectedDate, searchQuery]);
+
+  const totalFilteredAmountMinor = useMemo(() => {
+    return filteredLines.reduce((sum, l) => sum + l.amountMinor, 0n);
+  }, [filteredLines]);
+
+  function handleFilterByBatch(batch: BgYappyBatchView) {
+    if (batch.transactionDate) {
+      setSelectedDate(batch.transactionDate);
+    } else {
+      const d = new Date(`${batch.creditDate}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - 1);
+      setSelectedDate(d.toISOString().slice(0, 10));
+    }
+    setStatusFilter("all");
+    setSearchQuery("");
+    setActiveTab("lines");
+  }
+
+  const exportUrl = useMemo(() => {
+    if (!accountId) return null;
+    const params = new URLSearchParams();
+    if (selectedDate) params.set("date", selectedDate);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    return `/recon/accounts/${accountId}/export/yappy?${params.toString()}`;
+  }, [accountId, selectedDate, statusFilter]);
 
   return (
     <Card>
@@ -115,6 +181,7 @@ export function BgYappyPanel({ batches, lines = [] }: Props) {
                     <th className="py-2.5 px-3 font-medium text-right">Comisión Banco</th>
                     <th className="py-2.5 px-3 font-medium text-center">Estado</th>
                     <th className="py-2.5 px-3 font-medium">Observación</th>
+                    <th className="py-2.5 px-3 font-medium text-center">Acción</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -169,6 +236,17 @@ export function BgYappyPanel({ batches, lines = [] }: Props) {
                         <td className="py-3 px-3 text-xs text-muted-foreground max-w-xs truncate">
                           {batch.pendingReason || "Liquidada al centavo con reporte Yappy"}
                         </td>
+                        <td className="py-3 px-3 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => handleFilterByBatch(batch)}
+                            className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-sm hover:bg-muted/50 transition-colors"
+                            title="Ver pagos individuales de este día"
+                          >
+                            <span>Ver detalle</span>
+                            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -177,56 +255,179 @@ export function BgYappyPanel({ batches, lines = [] }: Props) {
             </div>
           )
         ) : (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-1.5 pb-2">
-              <button
-                type="button"
-                onClick={() => setStatusFilter("all")}
-                className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                  statusFilter === "all"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Todas ({lines.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setStatusFilter("received")}
-                className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                  statusFilter === "received"
-                    ? "bg-emerald-600 text-white"
-                    : "bg-muted text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Confirmadas ({receivedLinesCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setStatusFilter("pending")}
-                className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                  statusFilter === "pending"
-                    ? "bg-amber-600 text-white"
-                    : "bg-muted text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Pendientes ({pendingLinesCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setStatusFilter("in_transit")}
-                className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                  statusFilter === "in_transit"
-                    ? "bg-blue-600 text-white"
-                    : "bg-muted text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                En tránsito ({inTransitLinesCount})
-              </button>
+          <div className="space-y-4">
+            {/* Filters bar */}
+            <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {/* Status Pills */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter("all")}
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                      statusFilter === "all"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Todas ({lines.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter("received")}
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                      statusFilter === "received"
+                        ? "bg-emerald-600 text-white"
+                        : "bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Confirmadas ({receivedLinesCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter("pending")}
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                      statusFilter === "pending"
+                        ? "bg-amber-600 text-white"
+                        : "bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Pendientes ({pendingLinesCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter("in_transit")}
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                      statusFilter === "in_transit"
+                        ? "bg-blue-600 text-white"
+                        : "bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    En tránsito ({inTransitLinesCount})
+                  </button>
+                </div>
+
+                {/* Export button */}
+                {exportUrl && (
+                  <a
+                    href={exportUrl}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors ml-auto"
+                    title="Exportar transacciones filtradas a Excel"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>Exportar Excel</span>
+                  </a>
+                )}
+              </div>
+
+              {/* Date & Search Inputs */}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                {/* Date dropdown */}
+                <div className="relative flex items-center min-w-[220px]">
+                  <Calendar className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                  <select
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(e.target.value)}
+                    className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-8 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="">Todas las fechas ({lines.length} pagos)</option>
+                    {selectedDate && !availableDates.some((d) => d.date === selectedDate) && (
+                      <option value={selectedDate}>{selectedDate} (0 pagos)</option>
+                    )}
+                    {availableDates.map(({ date, count }) => (
+                      <option key={date} value={date}>
+                        {date} ({count} pagos)
+                      </option>
+                    ))}
+                  </select>
+                  {selectedDate && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDate("")}
+                      className="absolute right-2 text-muted-foreground hover:text-foreground"
+                      title="Limpiar fecha"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Search box */}
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Buscar cliente, celular, referencia o comentario..."
+                    className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-8 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                      title="Limpiar búsqueda"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Metrics Summary Strip */}
+              <div className="flex flex-wrap items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/50">
+                <div className="flex items-center gap-2">
+                  <span>
+                    Mostrando <strong className="text-foreground">{filteredLines.length}</strong> transacciones
+                  </span>
+                  <span>·</span>
+                  <span>
+                    Monto total: <strong className="font-mono text-foreground">{formatMinorUSD(totalFilteredAmountMinor)}</strong>
+                  </span>
+                </div>
+                {(selectedDate || searchQuery || statusFilter !== "all") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDate("");
+                      setSearchQuery("");
+                      setStatusFilter("all");
+                    }}
+                    className="text-primary hover:underline text-[11px]"
+                  >
+                    Restablecer filtros
+                  </button>
+                )}
+              </div>
             </div>
 
-            {filteredLines.length === 0 ? (
-              <p className="py-4 text-sm text-muted-foreground">No hay transacciones con el filtro seleccionado.</p>
+            {lines.length === 0 ? (
+              <div className="py-8 text-center space-y-2">
+                <p className="text-sm font-medium text-foreground">
+                  No hay transacciones individuales de Yappy registradas todavía.
+                </p>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                  Para ver el desglose detallado de pagos por cliente, sube el reporte de Yappy (.xlsx) en la sección de <strong className="text-foreground">Cargar Archivos</strong>.
+                </p>
+              </div>
+            ) : filteredLines.length === 0 ? (
+              <div className="py-8 text-center space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  No se encontraron transacciones con los filtros aplicados.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedDate("");
+                    setSearchQuery("");
+                    setStatusFilter("all");
+                  }}
+                  className="text-xs text-primary hover:underline font-medium"
+                >
+                  Restablecer filtros
+                </button>
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -320,4 +521,3 @@ export function BgYappyPanel({ batches, lines = [] }: Props) {
     </Card>
   );
 }
-
